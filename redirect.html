@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Twitch Redemption Monitor</title>
+    <script>
+        // taken from stackoverflow lol
+        function httpGetAsync(theUrl, callback)
+        {
+            let xmlHttp = new XMLHttpRequest();
+            xmlHttp.onreadystatechange = function() {
+                if (xmlHttp.readyState === 4 && xmlHttp.status === 200)
+                    callback(xmlHttp.responseText);
+            }
+            xmlHttp.open("GET", theUrl, true); // true for asynchronous
+            xmlHttp.send(null);
+        }
+
+        function captureToken(response) {
+            console.log(response);
+            window.close();
+        }
+
+        function redirectFragment() {
+            let fragment = document.location.hash;
+            fragment = fragment.slice(1);
+            let requestUrl = 'auth?' + fragment;
+            httpGetAsync(requestUrl, captureToken);
+            console.log(requestUrl);
+        }
+
+        window.onload = redirectFragment;
+    </script>
+</head>
+<body>
+
+</body>
+</html>
