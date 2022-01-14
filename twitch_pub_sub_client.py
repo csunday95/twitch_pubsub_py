@@ -4,9 +4,8 @@ import websockets
 from websockets import client as wsclient
 from websockets.client import WebSocketClientProtocol
 import json
-from obswebsocket import obsws
-from obswebsocket import requests as obsrequests
 import asyncio
+import inspect
 
 TWITCH_WEBSOCKET_URI = 'wss://pubsub-edge.twitch.tv'
 PONG_TIMEOUT = 10
@@ -21,6 +20,8 @@ class TwitchPubSubClient:
         self._callbacks = callbacks
         self._heartbeat_rate = heartbeat_rate if heartbeat_rate >= 20 else 20 # set 20 as minimum 
         self._heartbeat_event = asyncio.Event()
+        self._callback_queue = asyncio.Queue()
+        self._callback_task = None  # type: asyncio.Task
 
     async def _connect(self):
         self._connection = await wsclient.connect(TWITCH_WEBSOCKET_URI)
@@ -42,12 +43,25 @@ class TwitchPubSubClient:
             self._connection = None
             print('Got error subscribing on pubsub endpoint')
             return False
+        self._callback_task = asyncio.create_task(self._process_callbacks(self._callback_queue))
         return True
 
     async def _disconnect(self):
         if self._connection is not None and self._connection.open:
             await self._connection.close()
             self._connection = None
+        if self._callback_task is not None:
+            self._callback_task.cancel()
+            await asyncio.gather(self._callback_task, return_exceptions=True)
+
+    async def _process_callbacks(self, queue: asyncio.Queue):
+        while True:
+            callback, data, user_ids = await queue.get()
+            if inspect.iscoroutinefunction(callback):
+                await callback(data, user_ids)
+            else:
+                callback(data, user_ids)
+            queue.task_done()
 
     async def _heartbeat(self):
         while True:
@@ -104,7 +118,7 @@ class TwitchPubSubClient:
                         print(f'malformed message from twitch: {e}')
                         continue
                     if topic in self._callbacks:
-                        self._callbacks[topic](json.loads(data['message']), user_ids)
+                        self._callback_queue.put_nowait((self._callbacks[topic], json.loads(data['message']), user_ids))
                 elif event_type == 'PONG':
                     self._heartbeat_event.set()
                 else:

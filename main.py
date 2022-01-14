@@ -7,10 +7,12 @@ import sys
 import argparse
 import webbrowser
 import multiprocessing
+import json
 from auth_management_server import run_auth_server
 from helix_api_manager import HelixAPIManager
 from aiohttp import web
 from twitch_pub_sub_client import TwitchPubSubClient
+from obs_websocket_executor import OBSWebsocketExecutor
 
 # future plan: use to make a font nap prevention mechanism?
 # proc on ban of a fontNap alt account
@@ -33,20 +35,41 @@ def handle_auth(client_id):
     authorization_url += '&redirect_uri={redirect}'.format(redirect='http://localhost')
     authorization_url += '&scope=channel:read:redemptions'
     webbrowser.open(authorization_url, new=2)
-
     access_token = mp_queue.get()
     http_server_handle.terminate()
     http_server_handle.join()
     print('Authentication process complete, closing redirect server and starting redemption monitoring')
     return access_token
+    
 
+class CallbacksObject:
+    def __init__(self, ws_executor: OBSWebsocketExecutor):
+        self._ws_executor = ws_executor
 
-def handle_redemption_reward(reward: dict, user_ids: List[int]):
-    print(reward)
+    async def connect(self):
+        await self._ws_executor.connect()
 
+    async def handle_redemption_reward(self, reward: dict, user_ids: List[int]):
+        print(json.dumps(reward, indent=2))
+        reward = reward['data']['redemption']['reward']
+        reward_title = reward['title']
+        if reward_title == 'Are you sure about that?':
+            print('here')
+            await self._ws_executor.set_scene_item_visibility('JustDoIt', False)
+            await asyncio.sleep(0.05)
+            await self._ws_executor.set_scene_item_visibility('JustDoIt', True)
+            await asyncio.sleep(12)
+    
+    def list_callbacks(self):
+        return {
+            'channel-points-channel-v1': self.handle_redemption_reward
+        }
 
-async def run_tasks(auth_token, broadcaster_id, callbacks):
-    pubsub_client = TwitchPubSubClient(TOPICS, auth_token, broadcaster_id, callbacks, heartbeat_rate=20)
+async def run_tasks(auth_token, broadcaster_id):
+    obsExecutor = OBSWebsocketExecutor(port=4444)
+    await obsExecutor.connect()
+    callbackObj = CallbacksObject(obsExecutor)
+    pubsub_client = TwitchPubSubClient(TOPICS, auth_token, broadcaster_id, callbackObj.list_callbacks(), heartbeat_rate=20)
     await pubsub_client.run_tasks()
 
 
@@ -73,11 +96,7 @@ def main(args):
         broadcaster_id = manager.get_user_id_by_username(broadcaster_name)
         print(f'Got broadcaster ID {broadcaster_id} for user {broadcaster_name}')
 
-    callbacks = {
-        'channel-points-channel-v1': handle_redemption_reward
-    }
-    asyncio.run(run_tasks(auth_token, broadcaster_id, callbacks))
-
+    asyncio.run(run_tasks(auth_token, broadcaster_id))
     return 0
 
 if __name__ == '__main__':
