@@ -1,4 +1,7 @@
 {
   "broadcaster_name": "csunday95",
-  "client_id":  ""
+  "client_id": "",
+  "actions": "actions.json",
+  "obsws_password": "password",
+  "obsws_port": 4444
 }

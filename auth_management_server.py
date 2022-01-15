@@ -22,4 +22,4 @@ def run_auth_server(app, output_queue):
     handler = RequestHandlers(output_queue)
     app.router.add_get('/', handler.handle_auth_response)
     app.router.add_get('/auth', handler.handle_auth_redirect)
-    web.run_app(app, host='127.0.0.1', port=80)
+    web.run_app(app, host='127.0.0.1', port=8000)

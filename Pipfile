@@ -4,9 +4,9 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
-aiohttp = "==3.7.4.post0"
-requests = "==2.25.1"
-websockets = "==9.1"
+aiohttp = "*"
+requests = "*"
+websockets = "*"
 simpleobsws = "*"
 
 [dev-packages]
