@@ -3,6 +3,6 @@
         {"name": "set_scene_item_visibility", "args": ["Scene", "JustDoIt", false]},
         {"name": "wait", "args": [0.05]},
         {"name": "set_scene_item_visibility", "args": ["Scene", "JustDoIt", true]},
-        {"name": "wait", "args": [20]}
+        {"name": "wait", "args": [5]}
     ]
 }

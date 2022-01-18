@@ -8,8 +8,10 @@ aiohttp = "*"
 requests = "*"
 websockets = "*"
 simpleobsws = "*"
+pyqt5 = "*"
 
 [dev-packages]
+pyinstaller = "*"
 
 [requires]
 python_version = "3.9"

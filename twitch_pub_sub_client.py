@@ -1,4 +1,5 @@
 
+from concurrent.futures import CancelledError
 from typing import List, Callable, Optional, Dict
 import websockets
 from websockets import client as wsclient
@@ -9,6 +10,7 @@ import inspect
 
 TWITCH_WEBSOCKET_URI = 'wss://pubsub-edge.twitch.tv'
 PONG_TIMEOUT = 10
+WS_CLOSE_TIMEOUT = 1
 
 
 class TwitchPubSubClient:
@@ -16,15 +18,19 @@ class TwitchPubSubClient:
         self._topics = topics
         self._auth_token = auth_token
         self._broadcaster_id = broadcaster_id
+        self._asyncio_loop = None
         self._connection = None  # type: Optional[WebSocketClientProtocol]
         self._callbacks = callbacks
         self._heartbeat_rate = heartbeat_rate if heartbeat_rate >= 20 else 20 # set 20 as minimum 
         self._heartbeat_event = asyncio.Event()
+        self._heartbeat_abort = asyncio.Event()
         self._callback_queue = asyncio.Queue()
         self._callback_task = None  # type: asyncio.Task
+        self._heartbeat_task = None  # type: asyncio.Task
+        self._receive_task = None  # type: asyncio.Task
 
     async def _connect(self):
-        self._connection = await wsclient.connect(TWITCH_WEBSOCKET_URI)
+        self._connection = await wsclient.connect(TWITCH_WEBSOCKET_URI, close_timeout=WS_CLOSE_TIMEOUT)
         if not self._connection.open:
             self._connection = None
             print('unable to connect to twitch pubsub endpoint')
@@ -39,24 +45,63 @@ class TwitchPubSubClient:
         await self._connection.send(json.dumps(subscription_data))
         resp = json.loads(await self._connection.recv())
         if 'error' in resp and len(resp['error']) > 0:
-            self._connection.close()
+            await self._connection.close()
             self._connection = None
             print('Got error subscribing on pubsub endpoint')
             return False
         self._callback_task = asyncio.create_task(self._process_callbacks(self._callback_queue))
         return True
 
-    async def _disconnect(self):
-        if self._connection is not None and self._connection.open:
-            await self._connection.close()
-            self._connection = None
+    def disconnect(self):
+        if self._asyncio_loop is not None:
+            fut = asyncio.run_coroutine_threadsafe(self._disconnect_async(), self._asyncio_loop)
+            try:
+                fut.result()
+            except (asyncio.CancelledError, CancelledError):
+                print('disconnect future cancelled')
+
+    async def _disconnect_async(self):
+        print('here')
         if self._callback_task is not None:
-            self._callback_task.cancel()
-            await asyncio.gather(self._callback_task, return_exceptions=True)
+            self._callback_queue.put_nowait((None, None, None))
+        if self._heartbeat_task is not None:
+            self._heartbeat_abort.set()
+            self._heartbeat_event.set()
+        try:
+            if self._connection is not None and self._connection.open:
+                print('about to close')
+                await self._connection.close()
+                self._connection = None
+            print('closed')
+            to_wait = [self._callback_task, self._receive_task, self._heartbeat_task]
+            to_wait = [t for t in to_wait if t is not None]
+            if len(to_wait) > 0:
+                await asyncio.wait(to_wait)
+            # print('about to gather')
+            # await asyncio.gather(self._callback_task, return_exceptions=True)
+            # print('past callback')
+            # # TODO: heartbeat task is never exiting
+            # await asyncio.gather(self._heartbeat_task, return_exceptions=True)
+            # print('past heartbeat')
+            # await asyncio.gather(self._receive_task, return_exceptions=True)
+            print('past wait')
+
+        except asyncio.CancelledError as e:
+            print('?')
+        except Exception as e:
+            print('huh?')
+        finally:
+            self._asyncio_loop = None
+            self._receive_task = None
+            self._callback_task = None
+            self._heartbeat_task = None
 
     async def _process_callbacks(self, queue: asyncio.Queue):
         while True:
             callback, data, user_ids = await queue.get()
+            if callback is None:
+                queue.task_done()
+                return
             if inspect.iscoroutinefunction(callback):
                 await callback(data, user_ids)
             else:
@@ -64,9 +109,10 @@ class TwitchPubSubClient:
             queue.task_done()
 
     async def _heartbeat(self):
-        while True:
+        self._heartbeat_abort.clear()
+        to_send = json.dumps({'type': 'PING'})
+        while not self._heartbeat_task.cancelled():
             try:
-                to_send = json.dumps({'type': 'PING'})
                 self._heartbeat_event.clear()
                 await self._connection.send(to_send)
                 try:
@@ -74,17 +120,22 @@ class TwitchPubSubClient:
                 except asyncio.TimeoutError:
                     print('exited heartbeat loop due to pong timeout')
                     return
-                await asyncio.sleep(self._heartbeat_rate)
-            except websockets.exceptions.ConnectionClosed:
-                print('exited heartbeat loop due to disconnect')
-                return 
+                try:
+                    await asyncio.wait_for(self._heartbeat_abort.wait(), self._heartbeat_rate)
+                    print('exiting heartbeat after heartbeat abort and cancelled task')
+                    return
+                except asyncio.TimeoutError:
+                    pass
+            except asyncio.CancelledError:
+                print(f'exited heartbeat loop due to disconnect')
+                return
     
     async def _reconnect(self, max_tries: int = -1):
         wait_time = 1
         tries = 0
         if max_tries < 0:
             max_tries = float('inf')
-        await self._disconnect()
+        await self._disconnect_async()
         while not await self._connect() and tries < max_tries:
             print(f'failed on reconnect; attempting again in {wait_time} seconds')
             await asyncio.sleep(wait_time)
@@ -129,23 +180,28 @@ class TwitchPubSubClient:
     
     async def run_tasks(self, reconnect_retries: int = 6):
         if not await self._connect():
-            print('Unable to connect to twitch PubSub endpoint')
-            return 1
-        heartbeat_task = asyncio.ensure_future(self._heartbeat())
-        receive_task = asyncio.ensure_future(self._receive_loop())
-        tasks = [heartbeat_task, receive_task]
+            return 'Unable to connect to twitch PubSub endpoint'
+        self._asyncio_loop = asyncio.get_running_loop()
+        self._heartbeat_task = asyncio.ensure_future(self._heartbeat())
+        self._receive_task = asyncio.ensure_future(self._receive_loop())
+        tasks = [self._heartbeat_task, self._receive_task]
         while True:
             _, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-            if receive_task in pending:  # heartbeat failure case
+            if self._heartbeat_abort.is_set():
+                break
+            if self._receive_task in pending:  # heartbeat failure case
                 print('failed heartbeat check; attempting to reconnect')
                 if not await self._reconnect(max_tries=reconnect_retries):
                     print('unable to reconnect, exiting')
                     self._disconnect()
                     for task in pending:
                         asyncio.wait([task])
-                    return
+                    return 'Unable to reconnect to twitch PubSub endpoint'
                 tasks = [
-                    receive_task,
+                    self._receive_task,
                     asyncio.ensure_future(self._heartbeat())
                 ]
+            else:  # receive task failure case
+                break
+        return None
         

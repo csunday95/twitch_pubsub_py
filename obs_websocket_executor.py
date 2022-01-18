@@ -14,13 +14,18 @@ class OBSWebsocketExecutor:
         )
 
     async def connect(self):
-        await self._ws.connect()
-        await self._ws.wait_until_identified(30)
+        try:
+            if not await self._ws.connect():
+                return False
+        except OSError:
+            return False
+        return await self._ws.wait_until_identified(30)
 
     async def disconnect(self):
         await self._ws.disconnect()
 
     async def set_scene_item_visibility(self, scene_name: str, source_name: str, visible: bool) -> bool:
+        # TODO: update to use GetSceneItemId
         ret = await self._ws.call(simpleobsws.Request('GetSceneItemList', {'sceneName': scene_name}))
         if not ret.ok():
             return False
