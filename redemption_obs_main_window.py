@@ -48,6 +48,7 @@ class RedemptionOBSMainWindow(QMainWindow):
         self._event_callback_obj = None  # type: TwitchWebsocketEventCallbacks
         self._pubsub_client = None  # type: TwitchPubSubClient
         self._async_loop = None
+        self._close_disconnect = False
         self.setWindowTitle('Twitch Redemption OBS Manager')
         self._status_bar = self.statusBar()
         self._status_bar.showMessage('Not Connected')
@@ -105,6 +106,11 @@ class RedemptionOBSMainWindow(QMainWindow):
         self._config_thread.start()
 
     def closeEvent(self, a0: QCloseEvent) -> None:
+        self._close_disconnect = True
+        if self._is_connected:
+            disconnect_thread = Thread(target=self._disconnect_callback)
+            disconnect_thread.start()
+            disconnect_thread.join()
         return super().closeEvent(a0)
 
     def _load_configuration(self):
@@ -183,6 +189,7 @@ class RedemptionOBSMainWindow(QMainWindow):
             self._async_loop
         )
         fut.result()
+        self._action_run_test_complete_signal.emit()
 
     def _handle_connection_complete(self, success: bool):
         if success:
@@ -204,10 +211,11 @@ class RedemptionOBSMainWindow(QMainWindow):
     def _handle_action_run_test_complete(self):
         self._tester_run_button.setDisabled(False)
         self._tester_run_button.setText('Run')
-        self._tester_redemption_name_line_edit.setReadOnly(False)
+        self._tester_redemption_name_cbox.setDisabled(False)
 
     def add_log_message(self, message: str):
-        self._add_log_message_signal.emit(message)
+        if self.isVisible():
+            self._add_log_message_signal.emit(message)
 
     def _on_add_log_message(self, message: str):
         self._log_text_edit.append(message + '\n')
@@ -250,9 +258,10 @@ class RedemptionOBSMainWindow(QMainWindow):
             self.add_log_message
         )
         self._pubsub_client = TwitchPubSubClient(
-            TWITCH_AUTH_TOPICS, 
-            auth_token, broadcaster_id, 
-            self._event_callback_obj.list_callbacks(), 
+            TWITCH_AUTH_TOPICS,
+            auth_token, broadcaster_id,
+            self._event_callback_obj.list_callbacks(),
+            self.add_log_message,
             heartbeat_rate=20
         )
         self._is_connected = True
@@ -274,8 +283,8 @@ class RedemptionOBSMainWindow(QMainWindow):
             broadcaster_id = manager.get_user_id_by_username(broadcaster_name)
             self.add_log_message(f'Got broadcaster ID {broadcaster_id} for user {broadcaster_name}')
         asyncio.run(self._run_websocket_tasks(auth_token, broadcaster_id))
-        self.add_log_message('Clean exit complete')
-        # now execute disconnect complete callback?
+        if not self._close_disconnect:
+            self.add_log_message('Clean exit complete')
 
     def _disconnect_callback(self):
         if not self._is_connected:

@@ -35,7 +35,7 @@ class Action:
             actions_dict[redemption_name] = action_spec_entries
         return actions_dict
 
-    async def execute(self, ws_executor: OBSWebsocketExecutor):
+    async def execute(self, ws_executor: OBSWebsocketExecutor) -> bool:
         if self._action_type == ActionEnum.SetSceneItemVisibility:
             await ws_executor.set_scene_item_visibility(*self._args)
         elif self._action_type == ActionEnum.UpdateSourceSettings:

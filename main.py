@@ -22,10 +22,10 @@ from twitch_websocket_event_callbacks import TwitchWebsocketEventCallbacks
 
 __version__ = '0.1.0'
 TOPICS = ["channel-points-channel-v1.{channel_id}"]
+HEARTBEAT_RATE = 20
 
 
 def handle_twitch_auth(client_id):
-    print('initializing auth redirect server')
     app = web.Application()
     mp_queue = multiprocessing.Queue()
     http_server_handle = multiprocessing.Process(target=run_auth_server,
@@ -41,7 +41,7 @@ def handle_twitch_auth(client_id):
     access_token = mp_queue.get()
     http_server_handle.terminate()
     http_server_handle.join()
-    print('Authentication process complete, closing redirect server and starting redemption monitoring')
+    print('Authentication process complete, closing redirect server')
     return access_token
 
 async def run_websocket_tasks(auth_token, broadcaster_id, config: dict, 
@@ -57,7 +57,13 @@ async def run_websocket_tasks(auth_token, broadcaster_id, config: dict,
         obsExecutor, 
         actions_dict
     )
-    pubsub_client = TwitchPubSubClient(TOPICS, auth_token, broadcaster_id, callbackObj.list_callbacks(), heartbeat_rate=1)
+    pubsub_client = TwitchPubSubClient(
+        TOPICS, 
+        auth_token, 
+        broadcaster_id, 
+        callbackObj.list_callbacks(), 
+        heartbeat_rate=HEARTBEAT_RATE
+    )
     await pubsub_client.run_tasks()
 
 

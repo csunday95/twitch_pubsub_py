@@ -14,13 +14,17 @@ WS_CLOSE_TIMEOUT = 1
 
 
 class TwitchPubSubClient:
-    def __init__(self, topics: List[str], auth_token: str, broadcaster_id: str, callbacks: Dict[str, Callable[[dict, List[int]], None]], heartbeat_rate: float = 60):
+    def __init__(self, topics: List[str], auth_token: str, broadcaster_id: str, 
+                 callbacks: Dict[str, Callable[[dict, List[int]], None]], 
+                 log_callback: Callable[[str, ], None],
+                 heartbeat_rate: float = 60):
         self._topics = topics
         self._auth_token = auth_token
         self._broadcaster_id = broadcaster_id
         self._asyncio_loop = None
         self._connection = None  # type: Optional[WebSocketClientProtocol]
         self._callbacks = callbacks
+        self._log_callback = log_callback
         self._heartbeat_rate = heartbeat_rate if heartbeat_rate >= 20 else 20 # set 20 as minimum 
         self._heartbeat_event = asyncio.Event()
         self._heartbeat_abort = asyncio.Event()
@@ -61,7 +65,6 @@ class TwitchPubSubClient:
                 print('disconnect future cancelled')
 
     async def _disconnect_async(self):
-        print('here')
         if self._callback_task is not None:
             self._callback_queue.put_nowait((None, None, None))
         if self._heartbeat_task is not None:
@@ -69,23 +72,12 @@ class TwitchPubSubClient:
             self._heartbeat_event.set()
         try:
             if self._connection is not None and self._connection.open:
-                print('about to close')
                 await self._connection.close()
                 self._connection = None
-            print('closed')
             to_wait = [self._callback_task, self._receive_task, self._heartbeat_task]
             to_wait = [t for t in to_wait if t is not None]
             if len(to_wait) > 0:
                 await asyncio.wait(to_wait)
-            # print('about to gather')
-            # await asyncio.gather(self._callback_task, return_exceptions=True)
-            # print('past callback')
-            # # TODO: heartbeat task is never exiting
-            # await asyncio.gather(self._heartbeat_task, return_exceptions=True)
-            # print('past heartbeat')
-            # await asyncio.gather(self._receive_task, return_exceptions=True)
-            print('past wait')
-
         except asyncio.CancelledError as e:
             print('?')
         except Exception as e:
@@ -103,9 +95,11 @@ class TwitchPubSubClient:
                 queue.task_done()
                 return
             if inspect.iscoroutinefunction(callback):
-                await callback(data, user_ids)
+                err_msg = await callback(data, user_ids)
             else:
-                callback(data, user_ids)
+                err_msg = callback(data, user_ids)
+            if err_msg is not None:
+                self._log_callback(f'Encountered error processing action: {err_msg}')
             queue.task_done()
 
     async def _heartbeat(self):
@@ -169,7 +163,9 @@ class TwitchPubSubClient:
                         print(f'malformed message from twitch: {e}')
                         continue
                     if topic in self._callbacks:
-                        self._callback_queue.put_nowait((self._callbacks[topic], json.loads(data['message']), user_ids))
+                        self._callback_queue.put_nowait(
+                            (self._callbacks[topic], json.loads(data['message']), user_ids)
+                        )
                 elif event_type == 'PONG':
                     self._heartbeat_event.set()
                 else:

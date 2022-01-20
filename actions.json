@@ -1,8 +1,8 @@
 {
     "Are you sure about that?": [
-        {"name": "set_scene_item_visibility", "args": ["Scene", "JustDoIt", false]},
+        {"name": "set_scene_item_visibility", "args": ["PCCaptureFullscreen", "JustDoIt", false]},
         {"name": "wait", "args": [0.05]},
-        {"name": "set_scene_item_visibility", "args": ["Scene", "JustDoIt", true]},
+        {"name": "set_scene_item_visibility", "args": ["PCCaptureFullscreen", "JustDoIt", true]},
         {"name": "wait", "args": [5]}
     ]
 }
